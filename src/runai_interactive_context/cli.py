@@ -155,13 +155,15 @@ def _handle_port_context(job: RunAIJobDetails, container_port: int):
 def interactive_context(
     job_name: str,
     image: str,
-    command: Optional[list[str]] = typer.Argument(None),
+    args: Optional[list[str]] = typer.Argument(
+        None, help="Additional arguments passed to `runai submit`"
+    ),
     mode: RunAIInteractiveMode = RunAIInteractiveMode.SHELL,
     container_port: Optional[int] = typer.Option(
         None, help="The container port to forward to localhost"
     ),
 ):
-    command = command or []
+    args = args or []
     # Checking the runai is available
     if not check_command("runai", "--help"):
         log_error("Could not find the runai CLI")
@@ -172,7 +174,7 @@ def interactive_context(
         log_error("container_port should be defined if mode=port")
         raise typer.Exit(code=1)
 
-    with runai_submit_interactive_job(job_name, image, command) as job:
+    with runai_submit_interactive_job(job_name, image, args) as job:
         if mode == RunAIInteractiveMode.SHELL:
             _handle_shell_context(job)
         elif mode == RunAIInteractiveMode.PORT:
@@ -181,45 +183,8 @@ def interactive_context(
         print("Job started")
         time.sleep(1000)
 
-    print(f"{image=}, {command=}")
+    print(f"{image=}, {args=}")
 
 
 def main():
     typer.run(interactive_context)
-
-
-"""
-
-LSIR_EXPLORATION_IMAGE="nginx"
-
-
-runai-interactive-trap() {
-    runai delete job "$1"
-    trap - SIGHUP
-}
-
-await-runai-job-running() {
-    job_name="$1"
-
-    echo "Waiting for $job_name to start"
-    until test "$(runai list | grep "$job_name" | awk '{print $2}')" == 'Running'
-    do
-        sleep 5
-    done
-}
-
-runai-notebook-server() {
-    job_name="lsir-interactive-notebook"
-    # Add a trap is the signal is interrupted or killed
-    trap 'runai-interactive-trap "$job_name"' SIGHUP
-    # Start the job
-    runai submit "$job_name" -i "$LSIR_EXPLORATION_IMAGE" --interactive
-    # Wait for the pod to start
-    await-runai-job-running "$job_name"
-    # Forward a port locally
-    kubectl port-forward "pods/$job_name-0-0" :8888
-    # Delete the job when exiting
-    runai-interactive-trap "$job_name"
-}
-
-"""
