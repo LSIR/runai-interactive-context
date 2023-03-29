@@ -169,9 +169,9 @@ URL_RE = re.compile(rb"http\S+")
 
 
 def find_jupyter_details_in_logs(line: bytes) -> Optional[JupyterConnectionDetails]:
-    urls: list[str] = URL_RE.findall(line)
+    urls: list[bytes] = URL_RE.findall(line)
     for url in urls:
-        url_obj = urlparse(url)
+        url_obj = urlparse(url.decode())
         token = parse_qs(url_obj.query).get("token")
         if token:
             port = url_obj.port
