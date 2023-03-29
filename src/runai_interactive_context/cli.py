@@ -1,10 +1,13 @@
 import enum
 import json
+import re
 import subprocess
-from contextlib import contextmanager
 import time
-from typing import Generator, NamedTuple, Optional
+from contextlib import contextmanager
+from typing import Callable, Generator, NamedTuple, Optional
+from urllib.parse import parse_qs, urlparse
 
+import retry
 import typer
 from rich.console import Console
 
@@ -16,6 +19,8 @@ class RunAIInteractiveMode(str, enum.Enum):
     SHELL = "shell"
     # Forwards a port
     PORT = "port"
+    # Jupyter server
+    JUPYTER = "jupyter"
 
 
 class RunAIJobStatus(enum.Enum):
@@ -34,6 +39,11 @@ class RunAIJobDetails(NamedTuple):
     name: str
     pod_name: str
     status: RunAIJobStatus
+
+
+class JupyterConnectionDetails(NamedTuple):
+    container_port: int
+    token: str
 
 
 def log_error(msg: str):
@@ -146,10 +156,48 @@ def _handle_shell_context(job: RunAIJobDetails):
     _wait_until_interupted()
 
 
-def _handle_port_context(job: RunAIJobDetails, container_port: int):
+def _handle_port_context(
+    job: RunAIJobDetails, container_port: int, build_url: Callable[[int], str]
+):
     with kubectl_pod_forward_port(job.pod_name, container_port) as local_port:
-        print(f"The application is running at http://localhost:{local_port}")
+        url = build_url(local_port)
+        print(f"The application is running at {url}")
         _wait_until_interupted()
+
+
+URL_RE = re.compile(rb"http\S+")
+
+
+def find_jupyter_details_in_logs(line: bytes) -> Optional[JupyterConnectionDetails]:
+    urls: list[str] = URL_RE.findall(line)
+    for url in urls:
+        url_obj = urlparse(url)
+        token = parse_qs(url_obj.query).get("token")
+        if token:
+            port = url_obj.port
+            if port is None:
+                port = 80 if url_obj.scheme == "http" else 443
+            return JupyterConnectionDetails(port, token[0])
+
+
+@retry.retry((subprocess.CalledProcessError, ValueError), delay=10, tries=6)
+def extract_jupyter_details_from_job(job_name: str) -> JupyterConnectionDetails:
+    proc = subprocess.run(["runai", "logs", job_name], capture_output=True)
+    proc.check_returncode()
+    jupyter_details = find_jupyter_details_in_logs(proc.stdout)
+    if not jupyter_details:
+        raise ValueError("No jupyter details found")
+
+    return jupyter_details
+
+
+def _handle_jupyter_context(job: RunAIJobDetails):
+    jupyter_details = extract_jupyter_details_from_job(job.name)
+    _handle_port_context(
+        job,
+        jupyter_details.container_port,
+        lambda p: f"http://localhost:{p}/?token={jupyter_details.token}",
+    )
 
 
 def interactive_context(
@@ -179,11 +227,11 @@ def interactive_context(
             _handle_shell_context(job)
         elif mode == RunAIInteractiveMode.PORT:
             assert container_port is not None
-            _handle_port_context(job, container_port)
-        print("Job started")
-        time.sleep(1000)
-
-    print(f"{image=}, {args=}")
+            _handle_port_context(
+                job, container_port, lambda p: f"http://localhost:{p}/"
+            )
+        elif mode == RunAIInteractiveMode.JUPYTER:
+            _handle_jupyter_context(job)
 
 
 def main():
