@@ -28,6 +28,7 @@ class RunAIJobStatus(enum.Enum):
     CONTAINERCREATING = enum.auto()
     RUNNING = enum.auto()
     NOT_READY = enum.auto()
+    IMAGEPULLBACKOFF = enum.auto()
     DOES_NOT_EXISTS = enum.auto()
 
     @classmethod
@@ -87,6 +88,9 @@ def wait_until_job_started(job_name: str) -> RunAIJobDetails:
     while (job := get_runai_job_status(job_name)).status != RunAIJobStatus.RUNNING:
         if job.status == RunAIJobStatus.DOES_NOT_EXISTS:
             log_error(f"Job {job_name} does not exists.")
+            raise typer.Exit(code=1)
+        if job.status == RunAIJobStatus.IMAGEPULLBACKOFF:
+            log_error("Couldn't pull the image, are you sure it exists?")
             raise typer.Exit(code=1)
         if (
             job.status == RunAIJobStatus.CONTAINERCREATING
