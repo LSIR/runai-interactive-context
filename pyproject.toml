@@ -32,6 +32,9 @@ Documentation = "https://github.com/unknown/runai-interactive-context#readme"
 Issues = "https://github.com/unknown/runai-interactive-context/issues"
 Source = "https://github.com/unknown/runai-interactive-context"
 
+[project.scripts]
+runai-interactive = "runai_interactive_context.cli:main"
+
 [tool.hatch.version]
 path = "src/runai_interactive_context/__about__.py"
 
