@@ -1,6 +1,7 @@
 import enum
 import json
 import re
+import signal
 import subprocess
 import time
 from contextlib import contextmanager
@@ -12,6 +13,11 @@ import typer
 from rich.console import Console
 
 err_console = Console(stderr=True)
+
+
+def handle_sighup(signum, frame):
+    log_error("Hangup received, terminating job.")
+    raise typer.Exit(code=1)
 
 
 class RunAIInteractiveMode(str, enum.Enum):
@@ -106,14 +112,13 @@ def wait_until_job_started(job_name: str) -> RunAIJobDetails:
 def runai_submit_interactive_job(
     job_name: str, image: str, command: list[str]
 ) -> Generator[RunAIJobDetails, None, None]:
-    process = subprocess.run(
-        ["runai", "submit", job_name, "-i", image, "--interactive"] + command
-    )
-    if process.returncode != 0:
-        log_error("Could not submit job to RunAI")
-        raise typer.Exit(code=1)
-
     try:
+        job_cmd = ["runai", "submit", job_name, "-i", image, "--interactive"] + command
+        print(f"Submitting job: {' '.join(job_cmd)}")
+        process = subprocess.run(job_cmd)
+        if process.returncode != 0:
+            log_error("Could not submit job to RunAI")
+            raise typer.Exit(code=1)
         print("Waiting for the job to start...")
         yield wait_until_job_started(job_name)
     finally:
@@ -184,7 +189,7 @@ def find_jupyter_details_in_logs(line: bytes) -> Optional[JupyterConnectionDetai
             return JupyterConnectionDetails(port, token[0])
 
 
-@retry.retry((subprocess.CalledProcessError, ValueError), delay=10, tries=6)
+@retry.retry((subprocess.CalledProcessError, ValueError), delay=10, tries=20)
 def extract_jupyter_details_from_job(job_name: str) -> JupyterConnectionDetails:
     proc = subprocess.run(["runai", "logs", job_name], capture_output=True)
     proc.check_returncode()
@@ -225,6 +230,9 @@ def interactive_context(
     if mode == RunAIInteractiveMode.PORT and container_port is None:
         log_error("container_port should be defined if mode=port")
         raise typer.Exit(code=1)
+
+    # Setting up signals
+    signal.signal(signal.SIGHUP, handle_sighup)
 
     with runai_submit_interactive_job(job_name, image, args) as job:
         if mode == RunAIInteractiveMode.SHELL:
