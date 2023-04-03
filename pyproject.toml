@@ -28,9 +28,9 @@ dependencies = [
 dynamic = ["version"]
 
 [project.urls]
-Documentation = "https://github.com/unknown/runai-interactive-context#readme"
-Issues = "https://github.com/unknown/runai-interactive-context/issues"
-Source = "https://github.com/unknown/runai-interactive-context"
+Documentation = "https://github.com/LSIR/runai-interactive-context#readme"
+Issues = "https://github.com/LSIR/runai-interactive-context/issues"
+Source = "https://github.com/LSIR/runai-interactive-context"
 
 [project.scripts]
 runai-interactive = "runai_interactive_context.cli:main"
