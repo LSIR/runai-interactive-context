@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "runai-interactive-context"
+description = 'CLI to run an interactive session on RunAI with cleaning on exit to limit costs'
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+keywords = []
+authors = [
+  { name = "Stephane Massonnet", email = "stephane.massonnet@epfl.ch" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = [
+  "retry",
+  "typer[all]",
+]
+dynamic = ["version"]
+
+[project.urls]
+Documentation = "https://github.com/LSIR/runai-interactive-context#readme"
+Issues = "https://github.com/LSIR/runai-interactive-context/issues"
+Source = "https://github.com/LSIR/runai-interactive-context"
+
+[project.scripts]
+runai-interactive = "runai_interactive_context.cli:main"
+
+[tool.hatch.version]
+path = "src/runai_interactive_context/__about__.py"
+
+[tool.hatch.envs.default]
+path = ".venv"
+dependencies = [
+  "pytest",
+  "pytest-cov",
+]
+[tool.hatch.envs.default.scripts]
+cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=src/runai_interactive_context --cov=tests {args}"
+no-cov = "cov --no-cov {args}"
+
+[[tool.hatch.envs.test.matrix]]
+python = ["39", "310", "311"]
+
+[tool.coverage.run]
+branch = true
+parallel = true
+omit = [
+  "src/runai_interactive_context/__about__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
