@@ -4,7 +4,7 @@ import re
 import signal
 import subprocess
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from typing import Callable, Generator, NamedTuple, Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -13,6 +13,37 @@ import typer
 from rich.console import Console
 
 err_console = Console(stderr=True)
+
+
+class DelayedKeyboardInterrupt:
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.interrupt_data = None
+        self.original_handler = None
+
+    def record_interrupt(self, sig, frame):
+        self.interrupt_data = sig, frame
+
+    def __enter__(self):
+        self.interrupt_data = None
+        self.original_handler = signal.signal(signal.SIGINT, self.record_interrupt)
+
+    def __exit__(self, type, value, traceback):
+        if self.original_handler is not None:
+            signal.signal(signal.SIGINT, self.original_handler)
+        if self.interrupt_data:
+            if self.original_handler is None or self.original_handler == signal.SIG_IGN:
+                pass
+            elif self.original_handler == signal.SIG_DFL:
+                raise KeyboardInterrupt()
+            else:
+                self.original_handler(*self.interrupt_data)  # type: ignore
+
+
+class DelayedKeyboardInterruptExitStack(ExitStack):
+    def __exit__(self, *args, **kwargs) -> bool:
+        with DelayedKeyboardInterrupt():
+            return super().__exit__(*args, **kwargs)
 
 
 def handle_sighup(signum, frame):
@@ -155,23 +186,28 @@ def kubectl_pod_forward_port(
                     proc.terminate()
 
 
-def _wait_until_interupted():
+def _wait_until_interrupted():
     while True:
         time.sleep(10)
 
 
 def _handle_shell_context(job: RunAIJobDetails):
     print(f"Interactive session started, you can connect with `runai bash {job.name}`")
-    _wait_until_interupted()
+    _wait_until_interrupted()
 
 
 def _handle_port_context(
-    job: RunAIJobDetails, container_port: int, build_url: Callable[[int], str]
+    exit_stack: ExitStack,
+    job: RunAIJobDetails,
+    container_port: int,
+    build_url: Callable[[int], str],
 ):
-    with kubectl_pod_forward_port(job.pod_name, container_port) as local_port:
-        url = build_url(local_port)
-        print(f"The application is running at {url}")
-        _wait_until_interupted()
+    local_port = exit_stack.enter_context(
+        kubectl_pod_forward_port(job.pod_name, container_port)
+    )
+    url = build_url(local_port)
+    print(f"The application is running at {url}")
+    _wait_until_interrupted()
 
 
 URL_RE = re.compile(rb"http\S+")
@@ -200,9 +236,10 @@ def extract_jupyter_details_from_job(job_name: str) -> JupyterConnectionDetails:
     return jupyter_details
 
 
-def _handle_jupyter_context(job: RunAIJobDetails):
+def _handle_jupyter_context(exit_stack: ExitStack, job: RunAIJobDetails):
     jupyter_details = extract_jupyter_details_from_job(job.name)
     _handle_port_context(
+        exit_stack,
         job,
         jupyter_details.container_port,
         lambda p: f"http://localhost:{p}/?token={jupyter_details.token}",
@@ -234,16 +271,18 @@ def interactive_context(
     # Setting up signals
     signal.signal(signal.SIGHUP, handle_sighup)
 
-    with runai_submit_interactive_job(job_name, image, args) as job:
+    with DelayedKeyboardInterruptExitStack() as stack:
+        job = stack.enter_context(runai_submit_interactive_job(job_name, image, args))
+
         if mode == RunAIInteractiveMode.SHELL:
             _handle_shell_context(job)
         elif mode == RunAIInteractiveMode.PORT:
             assert container_port is not None
             _handle_port_context(
-                job, container_port, lambda p: f"http://localhost:{p}/"
+                stack, job, container_port, lambda p: f"http://localhost:{p}/"
             )
         elif mode == RunAIInteractiveMode.JUPYTER:
-            _handle_jupyter_context(job)
+            _handle_jupyter_context(stack, job)
 
 
 def main():
