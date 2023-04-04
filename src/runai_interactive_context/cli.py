@@ -1,10 +1,11 @@
+import dataclasses
 import enum
 import json
 import re
 import signal
 import subprocess
 import time
-from contextlib import contextmanager, ExitStack
+from contextlib import AbstractContextManager, contextmanager, ExitStack
 from typing import Callable, Generator, NamedTuple, Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -42,8 +43,13 @@ class DelayedKeyboardInterrupt:
 
 class DelayedKeyboardInterruptExitStack(ExitStack):
     def __exit__(self, *args, **kwargs) -> bool:
+        print("Cleaning up...")
         with DelayedKeyboardInterrupt():
             return super().__exit__(*args, **kwargs)
+
+
+def preexec_ignore_sigint():
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 def handle_sighup(signum, frame):
@@ -139,21 +145,36 @@ def wait_until_job_started(job_name: str) -> RunAIJobDetails:
     return job
 
 
-@contextmanager
-def runai_submit_interactive_job(
-    job_name: str, image: str, command: list[str]
-) -> Generator[RunAIJobDetails, None, None]:
-    try:
-        job_cmd = ["runai", "submit", job_name, "-i", image, "--interactive"] + command
+@dataclasses.dataclass
+class RunAIInteractiveJob(AbstractContextManager[RunAIJobDetails]):
+    job_name: str
+    image: str
+    command: list[str]
+
+    def submit(self) -> RunAIJobDetails:
+        job_cmd = [
+            "runai",
+            "submit",
+            self.job_name,
+            "-i",
+            self.image,
+            "--interactive",
+        ] + self.command
         print(f"Submitting job: {' '.join(job_cmd)}")
         process = subprocess.run(job_cmd)
         if process.returncode != 0:
             log_error("Could not submit job to RunAI")
             raise typer.Exit(code=1)
         print("Waiting for the job to start...")
-        yield wait_until_job_started(job_name)
-    finally:
-        subprocess.run(["runai", "delete", "job", job_name])
+        return wait_until_job_started(self.job_name)
+
+    def __enter__(self) -> RunAIJobDetails:
+        return self.submit()
+
+    def __exit__(self, *args, **kwargs):
+        subprocess.run(
+            ["runai", "delete", "job", self.job_name], preexec_fn=preexec_ignore_sigint
+        )
 
 
 def kubectl_output_extract_forwarded_port(stdout_line: bytes) -> Optional[int]:
@@ -272,7 +293,11 @@ def interactive_context(
     signal.signal(signal.SIGHUP, handle_sighup)
 
     with DelayedKeyboardInterruptExitStack() as stack:
-        job = stack.enter_context(runai_submit_interactive_job(job_name, image, args))
+        job_def = RunAIInteractiveJob(job_name, image, args)
+        # Add the cleanup code to the exit stack
+        stack.push(job_def)
+        # Submit the job on RunAI
+        job = job_def.submit()
 
         if mode == RunAIInteractiveMode.SHELL:
             _handle_shell_context(job)
